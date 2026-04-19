@@ -1,54 +1,52 @@
 """
-Screenplay Agent — turns a one-line idea into a structured 3-scene screenplay.
+Screenplay Agent — wraps ViMax's Screenwriter for CineAgent.
+Uses free LLM providers (OpenRouter/Groq/DeepSeek).
 """
 
 import json
 import os
-from openai import OpenAI
-from dotenv import load_dotenv
+import asyncio
+from core.llm_providers import get_chat_model
+from agents.vimax.screenwriter import Screenwriter
 
-load_dotenv()
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+async def write_screenplay_async(idea: str, user_requirement: str = "3 cinematic scenes, short film style") -> dict:
+    """Use ViMax's Screenwriter to develop story + write script."""
+    chat_model = get_chat_model()
+    writer = Screenwriter(chat_model=chat_model)
 
-SCREENPLAY_PROMPT = """You are a cinematic screenplay writer. Given a one-line story idea, write a 3-scene short film screenplay.
+    print(f"[Screenplay Agent] Developing story from idea...")
+    story = await writer.develop_story(idea=idea, user_requirement=user_requirement)
 
-Return ONLY valid JSON in this exact format:
-{{
-  "title": "Film title",
-  "genre": "genre",
-  "scenes": [
-    {{
-      "scene_number": 1,
-      "setting": "Brief setting description",
-      "action": "What happens visually (2-3 sentences)",
-      "dialogue": "Character dialogue if any, or empty string",
-      "mood": "emotional tone",
-      "seedance_prompt": "Cinematic video generation prompt for Seedance 2.0 (50-80 words, vivid, specific camera movement, lighting, style)"
-    }}
-  ]
-}}
+    print(f"[Screenplay Agent] Writing script from story...")
+    scenes = await writer.write_script_based_on_story(story=story, user_requirement=user_requirement)
 
-Story idea: {idea}"""
+    # Build structured screenplay dict
+    screenplay = {
+        "title": idea[:50].strip(),
+        "story": story,
+        "scenes": [
+            {
+                "scene_number": i + 1,
+                "script": scene,
+                "seedance_prompt": _script_to_seedance_prompt(scene),
+                "action": scene[:200],
+                "dialogue": "",
+            }
+            for i, scene in enumerate(scenes[:3])  # max 3 scenes
+        ],
+    }
+    print(f"[Screenplay Agent] Done — {len(screenplay['scenes'])} scenes")
+    return screenplay
+
+
+def _script_to_seedance_prompt(script: str) -> str:
+    """Convert a scene script to a Seedance 2.0 video prompt."""
+    # Take first 150 chars of script as base, add cinematic style
+    base = script[:150].replace("\n", " ").strip()
+    return f"{base} Cinematic style, dramatic lighting, photorealistic, 4K, film grain, shallow depth of field."
 
 
 def write_screenplay(idea: str) -> dict:
-    """Generate a 3-scene screenplay from a story idea."""
-    print(f"[Screenplay Agent] Writing screenplay for: {idea}")
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a cinematic screenplay writer. Return only valid JSON."},
-            {"role": "user", "content": SCREENPLAY_PROMPT.format(idea=idea)},
-        ],
-        temperature=0.8,
-        response_format={"type": "json_object"},
-    )
-
-    screenplay = json.loads(response.choices[0].message.content)
-    print(f"[Screenplay Agent] Title: {screenplay['title']} | Scenes: {len(screenplay['scenes'])}")
-    return screenplay
+    """Sync wrapper."""
+    return asyncio.run(write_screenplay_async(idea))

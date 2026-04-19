@@ -1,0 +1,43 @@
+# CineAgent config — uses free/cheap LLM providers + Seedance 2.0
+# Copy this to config.yaml and fill in your keys
+
+chat_model:
+  init_args:
+    # FREE OPTIONS (pick one):
+    # Option 1: OpenRouter free tier (google/gemini-2.0-flash-exp:free)
+    model: google/gemini-2.0-flash-exp:free
+    model_provider: openai
+    api_key: YOUR_OPENROUTER_KEY   # free at openrouter.ai
+    base_url: https://openrouter.ai/api/v1
+
+    # Option 2: Groq (llama-3.3-70b-versatile — free tier)
+    # model: llama-3.3-70b-versatile
+    # model_provider: openai
+    # api_key: YOUR_GROQ_KEY       # free at console.groq.com
+    # base_url: https://api.groq.com/openai/v1
+
+    # Option 3: DeepSeek (very cheap, ~$0.001/1K tokens)
+    # model: deepseek-chat
+    # model_provider: openai
+    # api_key: YOUR_DEEPSEEK_KEY   # platform.deepseek.com
+    # base_url: https://api.deepseek.com/v1
+
+  max_requests_per_minute: 60
+  max_requests_per_day: 1000
+
+image_generator:
+  class_path: tools.image_generator_seedream.ImageGeneratorDoubaoSeedreamYunwuAPI
+  init_args:
+    api_key: YOUR_YUNWU_OR_BYTEPLUS_KEY
+  max_requests_per_minute: 10
+  max_requests_per_day: 200
+
+video_generator:
+  class_path: core.video_engine.VideoGeneratorSeedance2
+  init_args:
+    api_key: a3f914cf-838f-4bd3-91c7-135c33518f40   # hackathon key
+    fast: false
+  max_requests_per_minute: 5
+  max_requests_per_day: 100
+
+working_dir: .working_dir/cineagent

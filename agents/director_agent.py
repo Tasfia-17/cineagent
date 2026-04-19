@@ -1,48 +1,46 @@
 """
-Director Agent — reviews screenplay and enhances Seedance prompts for maximum visual quality.
-Adds camera movements, lighting, cinematography style to each scene prompt.
+Director Agent — wraps ViMax's StoryboardArtist to enhance scene prompts.
+Uses free LLM providers.
 """
 
-import json
-import os
-from openai import OpenAI
-from dotenv import load_dotenv
+import asyncio
+from core.llm_providers import get_chat_model
+from agents.vimax.storyboard_artist import StoryboardArtist
+from interfaces.character import CharacterInScene
 
-load_dotenv()
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+async def direct_screenplay_async(screenplay: dict) -> dict:
+    """
+    Use ViMax's StoryboardArtist to enhance each scene's Seedance prompt
+    with proper cinematography: shot types, camera moves, lighting.
+    """
+    chat_model = get_chat_model()
+    artist = StoryboardArtist(chat_model=chat_model)
 
-DIRECTOR_PROMPT = """You are a world-class film director. Review this screenplay and enhance each scene's Seedance video generation prompt.
+    print(f"[Director Agent] Enhancing {len(screenplay['scenes'])} scenes with storyboard direction...")
 
-For each scene, improve the seedance_prompt to include:
-- Specific camera movement (dolly in, crane shot, tracking shot, etc.)
-- Lighting style (golden hour, dramatic shadows, soft diffused, etc.)
-- Visual style (cinematic, photorealistic, film grain, color grade)
-- Motion and atmosphere details
+    for scene in screenplay["scenes"]:
+        try:
+            storyboard = await artist.design_storyboard(
+                script=scene["script"],
+                characters=[],  # no pre-extracted characters for speed
+                user_requirement="cinematic, dramatic lighting, Seedance 2.0 video generation style",
+            )
+            if storyboard:
+                # Use first shot's visual description as the Seedance prompt
+                first_shot = storyboard[0]
+                scene["seedance_prompt"] = (
+                    f"{first_shot.visual_desc} "
+                    f"Cinematic, photorealistic, 4K, film grain."
+                )
+                scene["storyboard"] = [s.model_dump() for s in storyboard]
+        except Exception as e:
+            print(f"  [Director Agent] Scene {scene['scene_number']} storyboard failed ({e}), using script prompt")
 
-Keep prompts under 100 words. Return the same JSON structure with enhanced seedance_prompts.
-
-Screenplay:
-{screenplay}"""
+    print(f"[Director Agent] Direction complete")
+    return screenplay
 
 
 def direct_screenplay(screenplay: dict) -> dict:
-    """Enhance screenplay prompts with cinematic direction."""
-    print(f"[Director Agent] Enhancing {len(screenplay['scenes'])} scenes cinematically")
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a film director. Return only valid JSON with the same structure."},
-            {"role": "user", "content": DIRECTOR_PROMPT.format(screenplay=json.dumps(screenplay, indent=2))},
-        ],
-        temperature=0.7,
-        response_format={"type": "json_object"},
-    )
-
-    directed = json.loads(response.choices[0].message.content)
-    print(f"[Director Agent] Direction complete for '{directed.get('title', screenplay['title'])}'")
-    return directed
+    """Sync wrapper."""
+    return asyncio.run(direct_screenplay_async(screenplay))

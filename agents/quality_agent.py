@@ -1,57 +1,49 @@
 """
-Quality Agent — evaluates generated video clips and decides if they need regeneration.
-Scores each clip and triggers retry with improved prompt if quality is low.
-This is what makes CineAgent truly AGENTIC (not just a pipeline).
+Quality Agent — scores video clips and decides whether to regenerate.
+Uses free LLM providers.
 """
 
 import json
-import os
-import base64
-from openai import OpenAI
-from dotenv import load_dotenv
+import asyncio
+from core.llm_providers import get_chat_model
 
-load_dotenv()
+QUALITY_PROMPT = """You are a film quality evaluator. A video clip was generated for this scene.
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-)
+Scene script: {script}
+Seedance prompt used: {prompt}
 
-QUALITY_PROMPT = """You are a film quality evaluator. A video clip was generated for this scene:
-
-Scene: {scene_description}
-Prompt used: {prompt}
-Generation status: {status}
-
-Based on the prompt and scene requirements, evaluate the likely quality and return JSON:
+Evaluate the likely quality and return JSON:
 {{
-  "score": 0-10,
+  "score": <0-10>,
   "issues": ["list of potential issues"],
-  "improved_prompt": "improved Seedance prompt if score < 7, else same prompt",
-  "should_regenerate": true/false
+  "improved_prompt": "<improved Seedance 2.0 prompt if score < 7, else same prompt>",
+  "should_regenerate": <true/false>
 }}
 
-Be strict: score < 7 means regenerate."""
+Score < 7 = regenerate. Be strict about cinematic quality."""
 
 
-def evaluate_clip(scene: dict, prompt: str, status: str = "generated") -> dict:
-    """Evaluate a video clip and return quality assessment."""
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You are a film quality evaluator. Return only valid JSON."},
-            {"role": "user", "content": QUALITY_PROMPT.format(
-                scene_description=scene.get("action", ""),
-                prompt=prompt,
-                status=status,
-            )},
-        ],
-        temperature=0.3,
-        response_format={"type": "json_object"},
-    )
+def evaluate_clip(scene: dict, prompt: str) -> dict:
+    """Evaluate a clip and return quality assessment with improved prompt if needed."""
+    try:
+        chat_model = get_chat_model()
 
-    result = json.loads(response.choices[0].message.content)
-    score = result.get("score", 5)
-    regen = result.get("should_regenerate", False)
-    print(f"  [Quality Agent] Score: {score}/10 | Regenerate: {regen}")
-    return result
+        async def _eval():
+            from langchain_core.messages import HumanMessage, SystemMessage
+            response = await chat_model.ainvoke([
+                SystemMessage(content="You are a film quality evaluator. Return only valid JSON."),
+                HumanMessage(content=QUALITY_PROMPT.format(
+                    script=scene.get("script", scene.get("action", ""))[:300],
+                    prompt=prompt,
+                )),
+            ])
+            return json.loads(response.content)
+
+        result = asyncio.run(_eval())
+        score = result.get("score", 7)
+        print(f"  [Quality Agent] Score: {score}/10 | Regenerate: {result.get('should_regenerate', False)}")
+        return result
+
+    except Exception as e:
+        print(f"  [Quality Agent] Evaluation failed ({e}), skipping")
+        return {"score": 7, "should_regenerate": False, "improved_prompt": prompt}

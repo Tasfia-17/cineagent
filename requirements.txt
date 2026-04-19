@@ -1,14 +1,33 @@
+# Core
 fastapi
 uvicorn[standard]
 python-dotenv
-openai
+pydantic
+httpx
 requests
 aiohttp
-moviepy==1.0.3
+
+# LLM (free providers: openrouter, groq, deepseek — all OpenAI-compatible)
+openai
+langchain>=0.3.26
+langchain-openai>=0.3.27
+langchain-community>=0.3.27
+langchain-core
+tenacity
+
+# Video generation
+moviepy>=2.2.1
+opencv-python
 pillow
+
+# Free TTS (no API key needed)
+edge-tts
+
+# UI
 gradio
-langchain
-langchain-openai
-httpx
-pydantic
-gtts
+
+# Subtitles (optional, from MoneyPrinterTurbo)
+# faster-whisper  # uncomment for subtitle generation
+
+# Utils
+chardet
