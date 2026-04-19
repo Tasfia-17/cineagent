@@ -1,126 +1,161 @@
 """
-CineAgent — Multi-agent cinematic short film generator
-Pipeline: idea → screenplay → storyboard → video clips (Seedance 2.0) → assembled film
+Seedance 2.0 video generation backend.
+Implements ViMax's VideoGenerator protocol (duck-typed).
+Upgraded from ViMax's doubao-seedance-1-0 → doubao-seedance-2-0-260128.
+
+Key Seedance 2.0 upgrades over 1.0:
+- Native audio generation (dialogue, SFX, ambient — all in one pass)
+- Multimodal inputs: up to 9 images + 3 videos + 3 audio in one request
+- @image1 / @audio1 reference syntax for conditioning
+- Up to 2K resolution, 4–15s clips
 """
 
 import os
-import time
-import requests
-from typing import Optional
-from dotenv import load_dotenv
-
-load_dotenv()
+import logging
+import asyncio
+import aiohttp
+from typing import List, Literal, Optional
+from interfaces.video_output import VideoOutput
+from utils.image import image_path_to_b64
 
 SEEDANCE_API_KEY = os.getenv("SEEDANCE_API_KEY", "a3f914cf-838f-4bd3-91c7-135c33518f40")
-SEEDANCE_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-SEEDANCE_MODEL = "doubao-seedance-2-0-260128"
-SEEDANCE_FAST_MODEL = "doubao-seedance-2-0-fast-260128"
+SEEDANCE_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks"
+T2V_MODEL = "doubao-seedance-2-0-260128"
+T2V_FAST_MODEL = "doubao-seedance-2-0-fast-260128"
 
 
-def generate_video_clip(
-    prompt: str,
-    image_url: Optional[str] = None,
-    duration: int = 5,
-    resolution: str = "720p",
-    aspect_ratio: str = "16:9",
-    generate_audio: bool = True,
-    fast: bool = False,
-) -> str:
+class VideoGeneratorSeedance2:
     """
-    Submit a Seedance 2.0 video generation task.
-    Returns task_id for polling.
+    Seedance 2.0 backend. Satisfies ViMax's VideoGenerator protocol.
+    Supports T2V, I2V (first frame), first+last frame, and native audio generation.
     """
-    model = SEEDANCE_FAST_MODEL if fast else SEEDANCE_MODEL
 
-    content = [{"type": "text", "text": prompt}]
-    if image_url:
-        content.append({"type": "image_url", "image_url": {"url": image_url}})
+    def __init__(
+        self,
+        api_key: str = SEEDANCE_API_KEY,
+        fast: bool = False,
+    ):
+        self.api_key = api_key
+        self.model = T2V_FAST_MODEL if fast else T2V_MODEL
 
-    payload = {
-        "model": model,
-        "content": content,
-        "resolution": resolution,
-        "ratio": aspect_ratio,
-        "duration": duration,
-        "watermark": False,
-        "generate_audio": generate_audio,
-    }
-
-    headers = {
-        "Authorization": f"Bearer {SEEDANCE_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    resp = requests.post(
-        f"{SEEDANCE_BASE_URL}/contents/generations/tasks",
-        json=payload,
-        headers=headers,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["id"]
-
-
-def poll_video_task(task_id: str, timeout: int = 300) -> str:
-    """
-    Poll until task succeeds. Returns video URL.
-    """
-    headers = {"Authorization": f"Bearer {SEEDANCE_API_KEY}"}
-    deadline = time.time() + timeout
-    wait = 10
-
-    while time.time() < deadline:
-        resp = requests.get(
-            f"{SEEDANCE_BASE_URL}/contents/generations/tasks/{task_id}",
-            headers=headers,
-            timeout=15,
+    def _build_content(
+        self,
+        prompt: str,
+        reference_image_paths: List[str],
+        audio_path: Optional[str] = None,
+        resolution: str = "720p",
+        aspect_ratio: str = "16:9",
+        duration: int = 5,
+        generate_audio: bool = True,
+    ) -> list:
+        """Build the multimodal content array for Seedance 2.0."""
+        # Seedance 2.0 accepts params inline in the prompt string
+        full_prompt = (
+            f"{prompt} "
+            f"--rs {resolution} --rt {aspect_ratio} "
+            f"--dur {duration} --fps 24 --wm false --seed -1 "
+            f"--cf false --ga {'true' if generate_audio else 'false'}"
         )
-        resp.raise_for_status()
-        data = resp.json()
-        status = data.get("status")
+        content = [{"type": "text", "text": full_prompt}]
 
-        if status == "succeeded":
-            return data["content"]["video_url"]
-        elif status in ("failed", "expired", "cancelled"):
-            raise RuntimeError(f"Seedance task {task_id} failed with status: {status}")
+        # First frame reference
+        if len(reference_image_paths) >= 1:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": image_path_to_b64(reference_image_paths[0])},
+                "role": "first_frame",
+            })
 
-        time.sleep(wait)
-        wait = min(wait * 1.5, 60)
+        # Last frame reference (first+last frame mode)
+        if len(reference_image_paths) >= 2:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": image_path_to_b64(reference_image_paths[1])},
+                "role": "last_frame",
+            })
 
-    raise TimeoutError(f"Seedance task {task_id} timed out after {timeout}s")
+        # Audio reference for native lip-sync (Seedance 2.0 exclusive)
+        if audio_path and os.path.exists(audio_path):
+            with open(audio_path, "rb") as f:
+                import base64
+                audio_b64 = "data:audio/mp3;base64," + base64.b64encode(f.read()).decode()
+            content.append({
+                "type": "audio_url",
+                "audio_url": {"url": audio_b64},
+            })
 
+        return content
 
-def download_video(url: str, output_path: str) -> str:
-    """Download video from URL to local path."""
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    with open(output_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
-    return output_path
+    async def _submit_task(self, content: list) -> str:
+        """Submit generation task, return task_id."""
+        payload = {"model": self.model, "content": content}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(SEEDANCE_ENDPOINT, headers=headers, json=payload) as resp:
+                        data = await resp.json()
+                        task_id = data["id"]
+                        logging.info(f"[Seedance2] Task submitted: {task_id}")
+                        return task_id
+            except Exception as e:
+                logging.error(f"[Seedance2] Submit error: {e}. Retrying in 2s...")
+                await asyncio.sleep(2)
 
+    async def _poll_task(self, task_id: str) -> str:
+        """Poll until succeeded, return video URL."""
+        url = f"https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks/{task_id}"
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        wait = 5
+        while True:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, headers=headers) as resp:
+                        data = await resp.json()
+            except Exception as e:
+                logging.error(f"[Seedance2] Poll error: {e}. Retrying...")
+                await asyncio.sleep(wait)
+                continue
 
-def generate_and_download(
-    prompt: str,
-    output_path: str,
-    image_url: Optional[str] = None,
-    duration: int = 5,
-    resolution: str = "720p",
-    aspect_ratio: str = "16:9",
-    generate_audio: bool = True,
-    fast: bool = False,
-) -> str:
-    """Full flow: submit → poll → download. Returns local file path."""
-    task_id = generate_video_clip(
-        prompt=prompt,
-        image_url=image_url,
-        duration=duration,
-        resolution=resolution,
-        aspect_ratio=aspect_ratio,
-        generate_audio=generate_audio,
-        fast=fast,
-    )
-    print(f"  [Seedance] Task submitted: {task_id}")
-    video_url = poll_video_task(task_id)
-    print(f"  [Seedance] Done: {video_url[:60]}...")
-    return download_video(video_url, output_path)
+            status = data.get("status")
+            if status == "succeeded":
+                video_url = data["content"]["video_url"]
+                logging.info(f"[Seedance2] Done: {video_url[:60]}...")
+                return video_url
+            elif status in ("failed", "expired", "cancelled"):
+                raise RuntimeError(f"[Seedance2] Task {task_id} failed: {status}")
+            else:
+                logging.info(f"[Seedance2] Status: {status}. Waiting {wait}s...")
+                await asyncio.sleep(wait)
+                wait = min(wait * 1.5, 30)
+
+    async def generate_single_video(
+        self,
+        prompt: str,
+        reference_image_paths: List[str],
+        resolution: Literal["480p", "720p", "1080p"] = "720p",
+        aspect_ratio: str = "16:9",
+        duration: Literal[5, 10] = 5,
+        generate_audio: bool = True,
+        audio_path: Optional[str] = None,
+        **kwargs,
+    ) -> VideoOutput:
+        """
+        Generate a video. Satisfies ViMax VideoGenerator protocol.
+        Returns VideoOutput with video URL.
+        """
+        content = self._build_content(
+            prompt=prompt,
+            reference_image_paths=reference_image_paths,
+            audio_path=audio_path,
+            resolution=resolution,
+            aspect_ratio=aspect_ratio,
+            duration=duration,
+            generate_audio=generate_audio,
+        )
+        task_id = await self._submit_task(content)
+        video_url = await self._poll_task(task_id)
+        return VideoOutput(fmt="url", ext="mp4", data=video_url)

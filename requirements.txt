@@ -3,13 +3,12 @@ uvicorn[standard]
 python-dotenv
 openai
 requests
+aiohttp
 moviepy==1.0.3
 pillow
 gradio
-langgraph
 langchain
 langchain-openai
-volcenginesdkarkruntime
-replicate
 httpx
 pydantic
+gtts
