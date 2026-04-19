@@ -3,24 +3,15 @@
 
 chat_model:
   init_args:
-    # FREE OPTIONS (pick one):
-    # Option 1: OpenRouter free tier (google/gemini-2.0-flash-exp:free)
-    model: google/gemini-2.0-flash-exp:free
+    # Pollinations.ai — FREE, no API key needed
+    model: openai
     model_provider: openai
-    api_key: YOUR_OPENROUTER_KEY   # free at openrouter.ai
-    base_url: https://openrouter.ai/api/v1
+    api_key: dummy                          # any value works
+    base_url: https://gen.pollinations.ai
 
-    # Option 2: Groq (llama-3.3-70b-versatile — free tier)
-    # model: llama-3.3-70b-versatile
-    # model_provider: openai
-    # api_key: YOUR_GROQ_KEY       # free at console.groq.com
-    # base_url: https://api.groq.com/openai/v1
-
-    # Option 3: DeepSeek (very cheap, ~$0.001/1K tokens)
-    # model: deepseek-chat
-    # model_provider: openai
-    # api_key: YOUR_DEEPSEEK_KEY   # platform.deepseek.com
-    # base_url: https://api.deepseek.com/v1
+    # Other free options:
+    # Groq:        base_url: https://api.groq.com/openai/v1  model: llama-3.3-70b-versatile
+    # OpenRouter:  base_url: https://openrouter.ai/api/v1    model: google/gemini-2.0-flash-exp:free
 
   max_requests_per_minute: 60
   max_requests_per_day: 1000

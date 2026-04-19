@@ -1,32 +1,37 @@
 """
-Free LLM provider setup for CineAgent.
-Supports: OpenRouter (free models), Groq (free tier), DeepSeek (cheap).
-No OpenAI key needed.
+LLM provider setup for CineAgent.
+Default: Pollinations.ai — completely free, no API key required.
+Fallback: OpenRouter, Groq, DeepSeek, OpenAI.
 """
 
 import os
 from langchain.chat_models import init_chat_model
 
-# ── Free provider configs ──────────────────────────────────────────────────
-
-FREE_PROVIDERS = {
-    "openrouter": {
-        "model": "google/gemini-2.0-flash-exp:free",
-        "base_url": "https://openrouter.ai/api/v1",
-        "env_key": "OPENROUTER_API_KEY",
-        "note": "Free tier at openrouter.ai — no credit card needed for free models",
+PROVIDERS = {
+    # No API key needed — works out of the box
+    "pollinations": {
+        "model": "openai",           # GPT-5.4 Nano via Pollinations
+        "base_url": "https://gen.pollinations.ai",
+        "env_key": "POLLINATIONS_API_KEY",  # optional
+        "note": "Free, no key needed — pollinations.ai",
     },
     "groq": {
         "model": "llama-3.3-70b-versatile",
         "base_url": "https://api.groq.com/openai/v1",
         "env_key": "GROQ_API_KEY",
-        "note": "Free tier at console.groq.com — very fast inference",
+        "note": "Free tier — console.groq.com",
+    },
+    "openrouter": {
+        "model": "google/gemini-2.0-flash-exp:free",
+        "base_url": "https://openrouter.ai/api/v1",
+        "env_key": "OPENROUTER_API_KEY",
+        "note": "Free models — openrouter.ai",
     },
     "deepseek": {
         "model": "deepseek-chat",
         "base_url": "https://api.deepseek.com/v1",
         "env_key": "DEEPSEEK_API_KEY",
-        "note": "~$0.001/1K tokens — cheapest paid option",
+        "note": "Cheap — platform.deepseek.com",
     },
     "openai": {
         "model": "gpt-4o-mini",
@@ -39,26 +44,26 @@ FREE_PROVIDERS = {
 
 def get_chat_model(provider: str = None):
     """
-    Return a LangChain chat model using the first available free provider.
-    Auto-detects from environment variables if provider not specified.
+    Return a LangChain chat model.
+    Defaults to Pollinations (free, no key needed).
+    Auto-detects other providers from environment variables.
     """
+    # Use explicitly set provider
     if provider is None:
-        # Auto-detect: try each provider in order
-        for name, cfg in FREE_PROVIDERS.items():
-            key = os.getenv(cfg["env_key"])
-            if key:
+        provider = os.getenv("LLM_PROVIDER", "pollinations")
+
+    # If not pollinations, check for API key
+    if provider != "pollinations":
+        for name, cfg in PROVIDERS.items():
+            if name == "pollinations":
+                continue
+            if os.getenv(cfg["env_key"]):
                 provider = name
-                print(f"[LLM] Using provider: {name} ({cfg['model']})")
                 break
 
-    if provider is None:
-        raise ValueError(
-            "No LLM API key found. Set one of:\n"
-            + "\n".join(f"  {cfg['env_key']} — {cfg['note']}" for cfg in FREE_PROVIDERS.values())
-        )
-
-    cfg = FREE_PROVIDERS[provider]
-    api_key = os.getenv(cfg["env_key"])
+    cfg = PROVIDERS[provider]
+    api_key = os.getenv(cfg["env_key"], "dummy")  # Pollinations works with any key
+    print(f"[LLM] Provider: {provider} | Model: {cfg['model']}")
 
     return init_chat_model(
         model=cfg["model"],
