@@ -1,28 +1,31 @@
 """
 ShopReel UI — Gradio demo interface
-Shows live agent reasoning + 5 platform videos side by side
 """
 
 import gradio as gr
 import json
 import asyncio
+import threading
 from shopreel_pipeline import run_shopreel_streaming
 
 DEMO_PRODUCTS = [
-    {"title": "Wireless Noise-Cancelling Headphones", "description": "Premium sound, 30hr battery, foldable design. Perfect for travel and work.", "price": "79.99", "vendor": "SoundWave", "image_url": ""},
-    {"title": "Organic Matcha Green Tea Powder", "description": "Ceremonial grade, 100g. Rich umami flavor, packed with antioxidants.", "price": "24.99", "vendor": "TeaLeaf", "image_url": ""},
-    {"title": "Minimalist Leather Wallet", "description": "Slim RFID-blocking wallet, holds 8 cards. Full-grain leather.", "price": "39.99", "vendor": "CraftCo", "image_url": ""},
+    ["Wireless Noise-Cancelling Headphones", "Premium sound, 30hr battery, foldable design.", "79.99", "SoundWave", ""],
+    ["Organic Matcha Green Tea Powder", "Ceremonial grade, 100g. Rich umami flavor, antioxidants.", "24.99", "TeaLeaf", ""],
+    ["Minimalist Leather Wallet", "Slim RFID-blocking wallet, holds 8 cards. Full-grain leather.", "39.99", "CraftCo", ""],
 ]
 
 
-async def generate_videos(title, description, price, vendor, image_url):
+def generate_videos(title, description, price, vendor, image_url):
+    """Sync generator — yields UI updates as pipeline runs."""
     if not title.strip():
         yield "Please enter a product title.", None, None, None, None, None, ""
         return
 
     product = {
-        "title": title, "body_html": description,
-        "vendor": vendor, "image_url": image_url,
+        "title": title,
+        "body_html": description,
+        "vendor": vendor,
+        "image_url": image_url,
         "variants": [{"price": price}] if price else [],
     }
 
@@ -30,13 +33,35 @@ async def generate_videos(title, description, price, vendor, image_url):
     videos = {}
     scripts = {}
 
-    async for msg in run_shopreel_streaming(product):
-        if msg.startswith("__RESULT__"):
-            result = json.loads(msg[10:])
-            videos = result.get("videos", {})
-            scripts = result.get("scripts", {})
-        else:
-            log_lines.append(msg)
+    # Run async pipeline in a new event loop
+    loop = asyncio.new_event_loop()
+
+    async def collect():
+        async for msg in run_shopreel_streaming(product):
+            if msg.startswith("__RESULT__"):
+                result = json.loads(msg[10:])
+                videos.update(result.get("videos", {}))
+                scripts.update(result.get("scripts", {}))
+            else:
+                log_lines.append(msg)
+
+    # Run in thread to avoid blocking Gradio
+    result_ready = threading.Event()
+
+    def run_loop():
+        loop.run_until_complete(collect())
+        result_ready.set()
+
+    t = threading.Thread(target=run_loop, daemon=True)
+    t.start()
+
+    # Poll and yield updates every 2 seconds
+    import time
+    last_len = 0
+    while not result_ready.is_set():
+        time.sleep(2)
+        if len(log_lines) > last_len:
+            last_len = len(log_lines)
             yield (
                 "\n".join(log_lines),
                 videos.get("tiktok"), videos.get("reels"),
@@ -45,21 +70,23 @@ async def generate_videos(title, description, price, vendor, image_url):
                 "",
             )
 
-    scripts_text = json.dumps(scripts, indent=2)
+    t.join()
+    loop.close()
+
     yield (
-        "\n".join(log_lines) + "\n\n✅ All done!",
+        "\n".join(log_lines) + "\n\n✅ Done!",
         videos.get("tiktok"), videos.get("reels"),
         videos.get("youtube"), videos.get("amazon"),
         videos.get("product_page"),
-        scripts_text,
+        json.dumps(scripts, indent=2),
     )
 
 
 with gr.Blocks(title="ShopReel", theme=gr.themes.Soft()) as demo:
     gr.Markdown("""
     # 🛍️ ShopReel
-    ### Add a product → 5 platform-optimized videos in minutes
-    *Seedance 2.0 · Seedream 5.0 · Always-on ecommerce video agent*
+    ### Product → 5 platform videos automatically
+    *Seedance 2.0 · Seedream 5.0 · Multi-agent pipeline*
     """)
 
     with gr.Row():
@@ -69,24 +96,17 @@ with gr.Blocks(title="ShopReel", theme=gr.themes.Soft()) as demo:
             with gr.Row():
                 price_in = gr.Textbox(label="Price ($)", placeholder="79.99")
                 vendor_in = gr.Textbox(label="Brand", placeholder="SoundWave")
-            image_in = gr.Textbox(label="Product Image URL (optional)", placeholder="https://...")
+            image_in = gr.Textbox(label="Product Image URL (optional)")
             generate_btn = gr.Button("🎬 Generate 5 Videos", variant="primary", size="lg")
 
         with gr.Column(scale=1):
             gr.Markdown("""
-            **Agent Pipeline:**
-            1. 📝 Script Agent → 5 platform scripts (Pollinations LLM)
-            2. 🖼️ Seedream 5.0 → product keyframe per platform
-            3. 🎞️ Seedance 2.0 I2V → 5 videos in parallel
-            4. ✅ Quality Agent → hook strength + CTA score
-            5. 🎙️ Narrator → platform-optimized voiceover
-
-            **Platforms:**
-            - TikTok (9:16, 15s)
-            - Instagram Reels (9:16, 15s)
-            - YouTube Short (16:9, 30s)
-            - Amazon Listing (16:9, 30s)
-            - Product Page (1:1, 10s)
+            **Pipeline:**
+            1. 📝 Script Agent → 5 platform scripts
+            2. 🖼️ Seedream 5.0 → keyframe per platform
+            3. 🎞️ Seedance 2.0 I2V → 5 videos (parallel)
+            4. ✅ Quality Agent → score + retry
+            5. 🎙️ Narrator → voiceover
             """)
 
     log_out = gr.Textbox(label="🤖 Live Agent Reasoning", lines=12, interactive=False)
@@ -108,7 +128,7 @@ with gr.Blocks(title="ShopReel", theme=gr.themes.Soft()) as demo:
     )
 
     gr.Examples(
-        examples=[[p["title"], p["description"], p["price"], p["vendor"], p["image_url"]] for p in DEMO_PRODUCTS],
+        examples=DEMO_PRODUCTS,
         inputs=[title_in, desc_in, price_in, vendor_in, image_in],
         label="Demo Products",
     )
