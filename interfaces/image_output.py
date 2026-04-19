@@ -1,7 +1,11 @@
 import base64
-import cv2
 from typing import List, Literal, Optional, Union
 from PIL import Image
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 from utils.image import download_image
 
